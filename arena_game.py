@@ -3,6 +3,7 @@ import math
 import random
 
 pygame.init()
+pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
 pygame.joystick.init()
 
 info = pygame.display.Info()
@@ -32,6 +33,7 @@ menu_font = pygame.font.SysFont("Arial", 40, bold=True)
 
 # Particle system
 particles = []
+camera_offset = [0, 0]  # For moving background effect
 
 class Particle:
     def __init__(self, x, y, vx, vy, color, lifetime):
@@ -55,11 +57,69 @@ class Particle:
         alpha = int(255 * (self.lifetime / self.max_lifetime))
         pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), max(1, int(self.radius)))
 
+# Sound generation
+def generate_sound(frequency, duration, volume=0.3):
+    """Generate a simple sine wave sound without numpy using pygame mixer"""
+    sample_rate = 22050
+    frames = int(duration * sample_rate)
+    
+    import array
+    arr = array.array('h')  # signed short integer
+    for i in range(frames):
+        # Generate sine wave
+        sample = math.sin(2.0 * math.pi * frequency * i / sample_rate)
+        sample = int(sample * 32767 * volume)
+        arr.append(sample)
+        arr.append(sample)  # stereo - same for both channels
+    
+    # Create sound from buffer
+    try:
+        sound = pygame.mixer.Sound(buffer=arr.tobytes())
+        return sound
+    except Exception as e:
+        # If sound creation fails, return a dummy object
+        class DummySound:
+            def play(self):
+                pass
+        return DummySound()
+
+# Pre-generate sound effects
+shoot_sound = generate_sound(800, 0.1, 0.3)  # Pew sound
+hit_sound = generate_sound(400, 0.15, 0.3)   # Impact sound
+ui_sound = generate_sound(600, 0.08, 0.2)    # UI beep
+
+def play_shoot_sound():
+    try:
+        shoot_sound.play()
+    except:
+        pass
+
+def play_hit_sound():
+    try:
+        hit_sound.play()
+    except:
+        pass
+
+def play_ui_sound():
+    try:
+        ui_sound.play()
+    except:
+        pass
+
 # Controller
 controller = None
 if pygame.joystick.get_count() > 0:
     controller = pygame.joystick.Joystick(0)
     controller.init()
+
+def normalize_angle_diff(target, current):
+    """Calculate shortest angle difference for smooth 360-degree rotation"""
+    diff = target - current
+    while diff > math.pi:
+        diff -= 2 * math.pi
+    while diff < -math.pi:
+        diff += 2 * math.pi
+    return diff
 
 # Weapon definitions
 WEAPONS = {
@@ -83,23 +143,27 @@ class Player:
         self.last_weapon_switch = 0
 
     def draw(self):
-        # Draw glow effect
+        # Draw enhanced glow effect with multiple layers
+        glow_color = (int(self.color[0]//3), int(self.color[1]//3), int(self.color[2]//3))
+        pygame.draw.circle(screen, glow_color, (int(self.x), int(self.y)), self.radius + 12)
         pygame.draw.circle(screen, (int(self.color[0]//2), int(self.color[1]//2), int(self.color[2]//2)), (int(self.x), int(self.y)), self.radius + 8)
         
-        # Draw main circle
+        # Draw main circle with border
         pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
+        pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), self.radius, 2)
         
-        # Draw direction indicator (triangle pointing in aim direction)
+        # Draw direction indicator (larger triangle pointing in aim direction)
         angle = self.angle
-        front_x = self.x + math.cos(angle) * (self.radius + 8)
-        front_y = self.y + math.sin(angle) * (self.radius + 8)
-        left_x = self.x + math.cos(angle + 2.5) * self.radius * 0.7
-        left_y = self.y + math.sin(angle + 2.5) * self.radius * 0.7
-        right_x = self.x + math.cos(angle - 2.5) * self.radius * 0.7
-        right_y = self.y + math.sin(angle - 2.5) * self.radius * 0.7
+        front_x = self.x + math.cos(angle) * (self.radius + 12)
+        front_y = self.y + math.sin(angle) * (self.radius + 12)
+        left_x = self.x + math.cos(angle + 2.5) * self.radius * 0.8
+        left_y = self.y + math.sin(angle + 2.5) * self.radius * 0.8
+        right_x = self.x + math.cos(angle - 2.5) * self.radius * 0.8
+        right_y = self.y + math.sin(angle - 2.5) * self.radius * 0.8
+        pygame.draw.polygon(screen, WEAPONS[self.weapon]["color"], [(front_x, front_y), (left_x, left_y), (right_x, right_y)])
         pygame.draw.polygon(screen, WHITE, [(front_x, front_y), (left_x, left_y), (right_x, right_y)], 2)
 
-        # Draw aim line (longer for sniper)
+        # Draw aim line (longer for sniper) with gradient effect
         if self.weapon == 2:  # Sniper
             aim_length = 300
         else:
@@ -107,23 +171,33 @@ class Player:
         
         end_x = self.x + math.cos(angle) * aim_length
         end_y = self.y + math.sin(angle) * aim_length
-        pygame.draw.line(screen, WEAPONS[self.weapon]["color"], (self.x, self.y), (end_x, end_y), 2)
+        
+        # Draw aim line with weapon color
+        weapon_color = WEAPONS[self.weapon]["color"]
+        pygame.draw.line(screen, weapon_color, (self.x, self.y), (end_x, end_y), 3)
+        # Add glow to aim line
+        pygame.draw.line(screen, weapon_color, (self.x, self.y), (end_x, end_y), 1)
 
-        # HP bar with better styling
-        bar_width = 50
-        bar_height = 8
+        # HP bar with enhanced styling
+        bar_width = 60
+        bar_height = 10
         ratio = self.hp / self.max_hp
         
         # Bar background
-        pygame.draw.rect(screen, (50, 50, 50), (self.x - 25, self.y - 45, bar_width, bar_height))
-        # Health fill (gradient color)
+        pygame.draw.rect(screen, (30, 30, 30), (self.x - 30, self.y - 50, bar_width, bar_height))
+        # Health fill (gradient color based on health)
         if ratio > 0.5:
-            color = (int(40 + 160 * (ratio - 0.5) * 2), 200, 40)  # Green to yellow
+            bar_color = (int(40 + 160 * (ratio - 0.5) * 2), 200, 40)  # Green to yellow
         else:
-            color = (200, int(40 + 160 * ratio * 2), 40)  # Red to yellow
-        pygame.draw.rect(screen, color, (self.x - 25, self.y - 45, bar_width * ratio, bar_height))
+            bar_color = (200, int(40 + 160 * ratio * 2), 40)  # Red to yellow
+        pygame.draw.rect(screen, bar_color, (self.x - 30, self.y - 50, bar_width * ratio, bar_height))
         # Bar border
-        pygame.draw.rect(screen, WHITE, (self.x - 25, self.y - 45, bar_width, bar_height), 1)
+        pygame.draw.rect(screen, WHITE, (self.x - 30, self.y - 50, bar_width, bar_height), 2)
+        
+        # Draw player name
+        player_name = "P1" if self is player1 else "P2"
+        name_text = font.render(player_name, True, WHITE)
+        screen.blit(name_text, (self.x - 10, self.y + 35))
 
 class Bullet:
     def __init__(self, x, y, angle, speed, damage, owner, color):
@@ -147,24 +221,68 @@ class Bullet:
     def draw(self):
         # Draw trail
         for i, point in enumerate(self.trail_points):
-            alpha = int(255 * (i / len(self.trail_points)))
-            size = max(1, int(4 * (i / len(self.trail_points))))
+            alpha = int(255 * (i / max(1, len(self.trail_points))))
+            size = max(1, int(5 * (i / max(1, len(self.trail_points)))))
             pygame.draw.circle(screen, self.color, (int(point[0]), int(point[1])), size)
         
-        # Draw bullet with glow
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), 6)
-        pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), 4)
+        # Draw bullet with enhanced glow
+        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), 7)
+        pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), 5)
+        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), 3)
 
     def off_screen(self):
         return self.x < 0 or self.x > WIDTH or self.y < 0 or self.y > HEIGHT
 
 
+class Obstacle:
+    def __init__(self, x, y, width, height):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.rect = pygame.Rect(x, y, width, height)
+    
+    def draw(self):
+        # Draw obstacle with glowing effect
+        glow_rect = self.rect.inflate(8, 8)
+        pygame.draw.rect(screen, (100, 50, 200), glow_rect)
+        pygame.draw.rect(screen, (150, 100, 255), self.rect)
+        pygame.draw.rect(screen, CYAN, self.rect, 3)
+    
+    def collides_with_circle(self, x, y, radius):
+        """Check if obstacle collides with a circle (player)"""
+        # Find closest point on rectangle to circle center
+        closest_x = max(self.rect.left, min(x, self.rect.right))
+        closest_y = max(self.rect.top, min(y, self.rect.bottom))
+        
+        # Calculate distance between circle center and closest point
+        distance = math.hypot(x - closest_x, y - closest_y)
+        return distance < radius
+    
+    def collides_with_point(self, x, y, radius=3):
+        """Check if obstacle collides with a point (bullet)"""
+        return self.rect.collidepoint(x, y)
+
+
 def draw_background():
+    global camera_offset
+    
     screen.fill(BLACK)
-    for i in range(0, WIDTH, 50):
-        pygame.draw.line(screen, (30,30,35), (i,0), (i,HEIGHT))
-    for j in range(0, HEIGHT, 50):
-        pygame.draw.line(screen, (30,30,35), (0,j), (WIDTH,j))
+    
+    # Moving grid background based on camera offset
+    grid_size = 50
+    offset_x = int(camera_offset[0]) % grid_size
+    offset_y = int(camera_offset[1]) % grid_size
+    
+    # Draw vertical lines
+    for i in range(-1, WIDTH // grid_size + 2):
+        x = i * grid_size - offset_x
+        pygame.draw.line(screen, (30, 30, 35), (x, 0), (x, HEIGHT), 1)
+    
+    # Draw horizontal lines
+    for j in range(-1, HEIGHT // grid_size + 2):
+        y = j * grid_size - offset_y
+        pygame.draw.line(screen, (30, 30, 35), (0, y), (WIDTH, y), 1)
 
 def draw_weapon_ui(player, x_offset):
     for i in range(3):
@@ -242,52 +360,43 @@ def show_menu():
                 return False
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if start_button.is_clicked(mouse_pos):
+                    play_ui_sound()
                     menu_running = False
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
-                    menu_running = False
-        
+                    play_ui_sound()
         pygame.display.flip()
     
     return True
 
 def show_game_over(winner):
-    draw_background()
-    
     # Winner text
     winner_color = BLUE if winner == "PLAYER 1" else GREEN
     winner_text = title_font.render(f"{winner} WINS!", True, winner_color)
-    winner_rect = winner_text.get_rect(center=(WIDTH // 2, HEIGHT // 3))
-    pygame.draw.rect(screen, winner_color, winner_rect.inflate(40, 40), 3)
-    screen.blit(winner_text, winner_rect)
+    winner_rect = winner_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
     
-    # Return to menu button
-    return_button = Button(WIDTH // 2 - 150, HEIGHT - 200, 300, 80, "RETURN TO MENU", BLUE, CYAN)
+    # Display winner for 3 seconds then return to menu
+    start_time = pygame.time.get_ticks()
+    display_duration = 3000  # 3 seconds in milliseconds
     
-    waiting = True
-    while waiting:
+    while True:
         clock.tick(FPS)
-        mouse_pos = pygame.mouse.get_pos()
-        return_button.update_hover(mouse_pos)
+        elapsed = pygame.time.get_ticks() - start_time
         
         draw_background()
-        pygame.draw.rect(screen, winner_color, winner_rect.inflate(40, 40), 3)
+        pygame.draw.rect(screen, winner_color, winner_rect.inflate(60, 60), 3)
         screen.blit(winner_text, winner_rect)
-        return_button.draw()
         
+        # Check for quit event
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if return_button.is_clicked(mouse_pos):
-                    waiting = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
-                    waiting = False
         
         pygame.display.flip()
-    
-    return True
+        
+        # Auto return to menu after duration
+        if elapsed >= display_duration:
+            return True
 
 # Show menu first
 if not show_menu():
@@ -298,11 +407,25 @@ while True:
     player1 = Player(200, 350, BLUE)
     player2 = Player(1000, 350, GREEN)
     bullets = []
+    
+    # Generate obstacles
+    obstacles = []
+    for i in range(8):
+        x = random.randint(100, WIDTH - 100)
+        y = random.randint(100, HEIGHT - 100)
+        w = random.randint(40, 100)
+        h = random.randint(40, 100)
+        obstacles.append(Obstacle(x, y, w, h))
 
     running = True
     game_over = False
     while running:
         clock.tick(FPS)
+        
+        # Update camera to follow average of both players
+        camera_offset[0] += (((player1.x + player2.x) / 2) - camera_offset[0]) * 0.05
+        camera_offset[1] += (((player1.y + player2.y) / 2) - camera_offset[1]) * 0.05
+        
         draw_background()
 
         for event in pygame.event.get():
@@ -314,18 +437,36 @@ while True:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_1:
                     player2.weapon = 0
+                    play_ui_sound()
                 if event.key == pygame.K_2:
                     player2.weapon = 1
+                    play_ui_sound()
                 if event.key == pygame.K_3:
                     player2.weapon = 2
+                    play_ui_sound()
 
         keys = pygame.key.get_pressed()
 
-        # Player 2 Movement
-        if keys[pygame.K_w]: player2.y -= 5
-        if keys[pygame.K_s]: player2.y += 5
-        if keys[pygame.K_a]: player2.x -= 5
-        if keys[pygame.K_d]: player2.x += 5
+        # Player 2 Movement - check collisions BEFORE moving
+        move_x, move_y = 0, 0
+        if keys[pygame.K_w]: move_y -= 5
+        if keys[pygame.K_s]: move_y += 5
+        if keys[pygame.K_a]: move_x -= 5
+        if keys[pygame.K_d]: move_x += 5
+        
+        # Only apply movement if it doesn't collide with obstacles
+        new_x = max(5, min(WIDTH - 5, player2.x + move_x))
+        new_y = max(5, min(HEIGHT - 5, player2.y + move_y))
+        
+        can_move = True
+        for obstacle in obstacles:
+            if obstacle.collides_with_circle(new_x, new_y, player2.radius):
+                can_move = False
+                break
+        
+        if can_move:
+            player2.x = new_x
+            player2.y = new_y
 
         # Mouse Aim
         mx, my = pygame.mouse.get_pos()
@@ -338,6 +479,7 @@ while True:
             if now - player2.last_shot > weapon["delay"]:
                 bullets.append(Bullet(player2.x, player2.y, player2.angle,
                                       weapon["speed"], weapon["damage"], player2, weapon["color"]))
+                play_shoot_sound()
                 player2.last_shot = now
 
         # Controller Player 1
@@ -347,11 +489,30 @@ while True:
             rx = controller.get_axis(2)
             ry = controller.get_axis(3)
 
-            player1.x += lx * 5
-            player1.y += ly * 5
+            # Player 1 Movement - check collisions BEFORE moving
+            move_x = lx * 5
+            move_y = ly * 5
+            
+            # Only apply movement if it doesn't collide with obstacles
+            new_x = max(5, min(WIDTH - 5, player1.x + move_x))
+            new_y = max(5, min(HEIGHT - 5, player1.y + move_y))
+            
+            can_move = True
+            for obstacle in obstacles:
+                if obstacle.collides_with_circle(new_x, new_y, player1.radius):
+                    can_move = False
+                    break
+            
+            if can_move:
+                player1.x = new_x
+                player1.y = new_y
 
+            # Reduced aim sensitivity for finer angle control with proper 360 wrapping
             if abs(rx) > 0.2 or abs(ry) > 0.2:
-                player1.angle = math.atan2(ry, rx)
+                target_angle = math.atan2(ry, rx)
+                # Use normalize_angle_diff for smooth 360-degree rotation
+                angle_diff = normalize_angle_diff(target_angle, player1.angle)
+                player1.angle += angle_diff * 0.15
 
             # R2 shoot
             if controller.get_axis(5) > 0.5:
@@ -360,6 +521,7 @@ while True:
                 if now - player1.last_shot > weapon["delay"]:
                     bullets.append(Bullet(player1.x, player1.y, player1.angle,
                                           weapon["speed"], weapon["damage"], player1, weapon["color"]))
+                    play_shoot_sound()
                     player1.last_shot = now
 
             # L1 / R1 weapon switch
@@ -367,9 +529,11 @@ while True:
             if now - player1.last_weapon_switch > 200:  # 200ms debounce
                 if controller.get_button(4):
                     player1.weapon = (player1.weapon - 1) % 3
+                    play_ui_sound()
                     player1.last_weapon_switch = now
                 if controller.get_button(5):
                     player1.weapon = (player1.weapon + 1) % 3
+                    play_ui_sound()
                     player1.last_weapon_switch = now
 
         # Bullet logic
@@ -382,12 +546,28 @@ while True:
 
             if dist < target.radius:
                 target.hp -= bullet.damage
+                play_hit_sound()
                 bullets.remove(bullet)
             elif bullet.off_screen():
                 bullets.remove(bullet)
+            else:
+                # Check collision with obstacles
+                bullet_hit_obstacle = False
+                for obstacle in obstacles:
+                    if obstacle.collides_with_point(bullet.x, bullet.y):
+                        bullet_hit_obstacle = True
+                        if bullet in bullets:
+                            bullets.remove(bullet)
+                        break
+                if bullet_hit_obstacle:
+                    continue
 
         player1.draw()
         player2.draw()
+        
+        # Draw obstacles
+        for obstacle in obstacles:
+            obstacle.draw()
 
         draw_weapon_ui(player1, 100)
         draw_weapon_ui(player2, WIDTH - 460)
