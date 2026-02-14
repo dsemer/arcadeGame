@@ -81,6 +81,7 @@ class Bullet:
     def off_screen(self):
         return self.x < 0 or self.x > WIDTH or self.y < 0 or self.y > HEIGHT
 
+
 def draw_background():
     screen.fill(BLACK)
     for i in range(0, WIDTH, 50):
